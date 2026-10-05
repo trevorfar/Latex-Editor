@@ -83,6 +83,9 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
     const link = store.project.cloud ?? { code, version: -1, hashes: {} };
     const need = Object.keys(meta.files).filter((p) => link.hashes[p] !== meta.files[p].h || !store.fileByPath(p));
     const data = await fetchFiles(code, meta, need);
+    const missing = need.filter((p) => !data[p]);
+    // Never record a file as synced without its contents; retry on the next poll instead.
+    if (missing.length) throw new Error(`Couldn't download ${missing.length} file(s) from the cloud.`);
     const files = Object.entries(meta.files).map(([path, entry]) => {
       if (data[path]) return { path, ...decodeFile(entry.k, data[path]) };
       const local = store.fileByPath(path);

@@ -38,8 +38,11 @@ class UpstashKv implements Kv {
 
   async hget(key: string, fields: string[]) {
     if (fields.length === 0) return [];
-    const res = (await this.redis.hmget<Record<string, string | null>>(key, ...fields)) ?? {};
-    return fields.map((f) => res[f] ?? null);
+    // With automaticDeserialization off, Upstash returns HMGET's raw array (one value per field).
+    const res = (await this.redis.hmget(key, ...fields)) as unknown;
+    if (Array.isArray(res)) return fields.map((_, i) => (res[i] as string | null) ?? null);
+    const obj = (res ?? {}) as Record<string, string | null>;
+    return fields.map((f) => obj[f] ?? null);
   }
 
   async save({ filesKey, metaKey, put, del, meta, ttlSeconds }: Parameters<Kv["save"]>[0]) {

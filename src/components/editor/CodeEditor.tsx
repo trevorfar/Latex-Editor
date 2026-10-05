@@ -61,6 +61,7 @@ interface CodeEditorProps {
   diagnostics: Map<string, EditorDiagnostic[]>;
   goto: GotoRequest | null;
   getIndex: () => ProjectIndex;
+  readOnly?: boolean;
   onCompile: () => void;
   onCursorLine?: (line: number) => void;
   onSyncToPdf?: () => void;
@@ -103,6 +104,7 @@ export function CodeEditor({
   diagnostics,
   goto,
   getIndex,
+  readOnly = false,
   onCompile,
   onCursorLine,
   onSyncToPdf,
@@ -120,16 +122,18 @@ export function CodeEditor({
     keymap: new Compartment(),
     spell: new Compartment(),
     complete: new Compartment(),
+    readOnly: new Compartment(),
   });
-  const latest = useRef({ onCompile, onCursorLine, onSyncToPdf, getIndex, settings, theme, store });
+  const latest = useRef({ onCompile, onCursorLine, onSyncToPdf, getIndex, settings, theme, store, readOnly });
   useLayoutEffect(() => {
-    latest.current = { onCompile, onCursorLine, onSyncToPdf, getIndex, settings, theme, store };
+    latest.current = { onCompile, onCursorLine, onSyncToPdf, getIndex, settings, theme, store, readOnly };
   });
 
   // ----- dynamic configuration -----
   const dynamicValues = () => {
-    const { settings: s, theme: t } = latest.current;
+    const { settings: s, theme: t, readOnly: ro } = latest.current;
     return {
+      readOnly: EditorState.readOnly.of(ro),
       theme: [EditorView.theme({}, { dark: t === "dark" }), syntaxHighlighting(t === "dark" ? darkHighlight : lightHighlight)],
       font: EditorView.theme({ "&": { fontSize: `${s.fontSize}px` } }),
       wrap: s.lineWrapping ? EditorView.lineWrapping : [],
@@ -155,7 +159,15 @@ export function CodeEditor({
     const v = dynamicValues();
     const c = compartments.current;
     // Order matters: vim's keymap must precede the default keymaps.
-    return [c.keymap.of(v.keymap), c.theme.of(v.theme), c.font.of(v.font), c.wrap.of(v.wrap), c.spell.of(v.spell), c.complete.of(v.complete)];
+    return [
+      c.keymap.of(v.keymap),
+      c.theme.of(v.theme),
+      c.font.of(v.font),
+      c.wrap.of(v.wrap),
+      c.spell.of(v.spell),
+      c.complete.of(v.complete),
+      c.readOnly.of(v.readOnly),
+    ];
   };
 
   const reconfigureAll = () => {
@@ -273,7 +285,7 @@ export function CodeEditor({
     if (!view || !currentId.current) return;
     view.dispatch({ effects: reconfigureAll() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings, theme]);
+  }, [settings, theme, readOnly]);
 
   // Diagnostics after each compile.
   useEffect(() => {

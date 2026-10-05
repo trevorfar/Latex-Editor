@@ -18,6 +18,16 @@ export interface ProjectMeta {
   updatedAt: number;
   /** Last file open in the editor. */
   lastFile?: string;
+  /** Set when the project is saved to the cloud. */
+  cloud?: CloudLink;
+}
+
+export interface CloudLink {
+  code: string;
+  /** Server version this copy last matched. -1 forces a full download. */
+  version: number;
+  /** Hash of each file as last synced, to upload and download only what changed. */
+  hashes: Record<string, string>;
 }
 
 export type FileKind = "text" | "binary";

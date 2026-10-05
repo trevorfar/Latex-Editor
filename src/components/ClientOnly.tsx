@@ -14,3 +14,4 @@ function Spinner() {
 // Both screens depend on IndexedDB, pdf.js and CodeMirror, which only exist in the browser.
 export const DashboardClient = dynamic(() => import("./dashboard/ProjectDashboard"), { ssr: false, loading: Spinner });
 export const WorkspaceClient = dynamic(() => import("./editor/Workspace"), { ssr: false, loading: Spinner });
+export const JoinClient = dynamic(() => import("./dashboard/JoinProject"), { ssr: false, loading: Spinner });

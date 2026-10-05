@@ -22,6 +22,9 @@ import type { PdfClick, PdfViewerHandle } from "./PdfViewer";
 import { TopBar, type ViewMode } from "./TopBar";
 import { SettingsDialog, ShortcutsDialog, WordCountDialog } from "./dialogs";
 import { useCompiler } from "./useCompiler";
+import { useCloudSession } from "./useCloudSession";
+import { CloudBanner, CloudChip, ShareDialog } from "./Cloud";
+import { createCloudProject, setDisplayName } from "@/lib/cloud";
 import { DialogProvider, useDialogs } from "@/components/ui/dialogs";
 import { Toaster, toast } from "@/components/ui/toast";
 
@@ -96,7 +99,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
   const [mobileView, setMobileView] = useState<"code" | "pdf">("code");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [desktopView, setDesktopView] = useState<ViewMode>("both");
-  const [dialog, setDialog] = useState<null | "settings" | "shortcuts" | "wordcount">(null);
+  const [dialog, setDialog] = useState<null | "settings" | "shortcuts" | "wordcount" | "share">(null);
   const [words, setWords] = useState<{ result: WordCountResult; files: string[] } | null>(null);
 
   const sidebarPanel = usePanelRef();
@@ -105,7 +108,16 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
   const layout = useDefaultLayout({ id: "texbench-workspace", storage: typeof window !== "undefined" ? localStorage : undefined });
   const sideLayout = useDefaultLayout({ id: "texbench-sidebar", storage: typeof window !== "undefined" ? localStorage : undefined });
 
-  const { project, currentPath } = snapshot;
+  const { project, currentPath, readOnly } = snapshot;
+  const cloud = useCloudSession(store, project.cloud?.code ?? null);
+
+  const saveToCloud = async (name: string) => {
+    setDisplayName(name);
+    await store.flush();
+    const code = await createCloudProject(store.project, name);
+    await store.setCloud({ code, version: 0, hashes: {} });
+    toast("Saved to the cloud. Share the code to collaborate.", "success");
+  };
   const currentFile = snapshot.files.find((f) => f.path === currentPath) ?? null;
 
   useEffect(() => {
@@ -213,6 +225,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
 
   // ----- actions -----
   const renameProject = async () => {
+    if (readOnly) return toast("You can rename the project while you have editing access.");
     const name = await dialogs.prompt({ title: "Rename project", initial: project.name, confirmLabel: "Rename" });
     if (name) await store.updateProject({ name });
   };
@@ -335,7 +348,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
 
   const editorPane = (
     <div className="relative flex h-full min-h-0 flex-col bg-bg">
-      {settings.showFormatBar && currentFile?.kind === "text" && <FormatBar getView={() => editorRef.current?.view() ?? null} />}
+      {settings.showFormatBar && !readOnly && currentFile?.kind === "text" && <FormatBar getView={() => editorRef.current?.view() ?? null} />}
       <div className="relative min-h-0 flex-1">
         <CodeEditor
           ref={editorRef}
@@ -346,6 +359,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
           diagnostics={diagnostics}
           goto={goto}
           getIndex={getIndex}
+          readOnly={readOnly}
           onCompile={() => void compiler.compile()}
           onCursorLine={setCursorLine}
           onSyncToPdf={() => void syncToPdf()}
@@ -397,7 +411,10 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
         onWordCount={openWordCount}
         onSettings={() => setDialog("settings")}
         onShortcuts={() => setDialog("shortcuts")}
+        onShare={() => setDialog("share")}
+        cloudChip={<CloudChip state={cloud} onClick={() => setDialog("share")} />}
       />
+      <CloudBanner state={cloud} onRequest={() => void cloud.requestEdit()} onLeave={() => void cloud.leaveQueue()} />
 
       {mobile ? (
         <div className="relative min-h-0 flex-1">
@@ -476,6 +493,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
         </Group>
       )}
 
+      <ShareDialog open={dialog === "share"} onClose={() => setDialog(null)} code={project.cloud?.code ?? null} state={cloud} onCreate={saveToCloud} />
       <SettingsDialog open={dialog === "settings"} onClose={() => setDialog(null)} />
       <ShortcutsDialog open={dialog === "shortcuts"} onClose={() => setDialog(null)} />
       <WordCountDialog open={dialog === "wordcount"} onClose={() => setDialog(null)} result={words?.result ?? null} files={words?.files ?? []} />

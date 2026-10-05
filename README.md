@@ -13,7 +13,11 @@ An Overleaf-style LaTeX editor built with Next.js: code on the left, PDF on the 
 - **Export**: download PDF, open it in a new tab to print, download the project as `.zip`, and import `.zip` files (Overleaf exports work).
 - Templates (article, report/thesis, lab report, assignment, Beamer, letter, CV), pdfLaTeX/XeLaTeX/LuaLaTeX, BibTeX/Biber, word count, outline, dark mode.
 
-Projects are saved in the browser (IndexedDB). There are no accounts or server-side storage.
+Projects are saved in the browser (IndexedDB). Optionally, **Save to cloud** uploads a project and gives an invite code (or `/join/CODE` link). Anyone with the code can open it. One person edits at a time; everyone else sees a read-only copy that updates as the editor saves, and can join a queue. The lock passes to the next person when the editor leaves, closes the tab (about 70 s), or is inactive for 10 minutes. Edits upload about 1.5 s after typing stops, and only changed files are sent (deflate-compressed).
+
+### Cloud storage setup (free)
+
+Cloud projects live in Upstash Redis (free tier: 256 MB, 500K commands/month). In Vercel: **Storage → Upstash for Redis → Connect** to this project, or reuse an existing database by adding `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` (the `KV_REST_API_*` names the integration injects also work). Keys are prefixed `tb:` and expire after 180 days without changes. In local development without credentials, cloud data is stored in `.data/cloud/`.
 
 ## Compiling
 

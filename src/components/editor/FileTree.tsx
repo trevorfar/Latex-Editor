@@ -92,6 +92,7 @@ interface FileTreeProps {
 }
 
 export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
+  const readOnly = snapshot.readOnly;
   const tree = useMemo(() => buildTree(snapshot), [snapshot]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -125,7 +126,12 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
   };
 
   const newFolder = async (folder: string) => {
-    const name = await dialogs.prompt({ title: "New folder", label: folder ? `In ${folder}/` : undefined, confirmLabel: "Create", validate: validateName(folder) });
+    const name = await dialogs.prompt({
+      title: "New folder",
+      label: folder ? `In ${folder}/` : undefined,
+      confirmLabel: "Create",
+      validate: validateName(folder),
+    });
     if (!name) return;
     await store.createFolder(normalizePath(joinPath(folder, name))!);
     setCollapsed((c) => {
@@ -154,7 +160,9 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
     const count = node.folder ? snapshot.files.filter((f) => isInFolder(f.path, node.path)).length : 1;
     const ok = await dialogs.confirm({
       title: `Delete ${node.folder ? "folder" : "file"}?`,
-      message: node.folder ? `"${node.path}" and the ${count} file${count === 1 ? "" : "s"} inside it will be deleted.` : `"${node.path}" will be deleted.`,
+      message: node.folder
+        ? `"${node.path}" and the ${count} file${count === 1 ? "" : "s"} inside it will be deleted.`
+        : `"${node.path}" will be deleted.`,
       confirmLabel: "Delete",
       danger: true,
     });
@@ -212,6 +220,9 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
   const entriesFor = (node: Node | null): MenuEntry[] => {
     const folder = node ? (node.folder ? node.path : dirname(node.path)) : "";
     const entries: MenuEntry[] = [];
+    if (readOnly) {
+      return node && !node.folder ? [{ label: "Download", icon: <Download size={14} />, onSelect: () => download(node.path) }] : [];
+    }
     if (node && !node.folder) {
       if (isTexPath(node.path) && node.path !== project.mainFile) {
         entries.push({ label: "Set as main document", icon: <Star size={14} />, onSelect: () => void store.setMainFile(node.path) });
@@ -242,6 +253,7 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
 
   // ----- drag and drop -----
   const onDragStart = (e: React.DragEvent, node: Node) => {
+    if (readOnly) return e.preventDefault();
     e.dataTransfer.setData("application/x-texbench-path", node.path);
     e.dataTransfer.effectAllowed = "move";
   };
@@ -249,6 +261,7 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
   const dropFolderFor = (node: Node | null) => (node ? (node.folder ? node.path : dirname(node.path)) : "");
 
   const onDragOver = (e: React.DragEvent, node: Node | null) => {
+    if (readOnly) return;
     const internal = e.dataTransfer.types.includes("application/x-texbench-path");
     const external = e.dataTransfer.types.includes("Files");
     if (!internal && !external) return;
@@ -260,6 +273,7 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
 
   const onDrop = async (e: React.DragEvent, node: Node | null) => {
     e.preventDefault();
+    if (readOnly) return;
     e.stopPropagation();
     setDropTarget(null);
     const folder = dropFolderFor(node);
@@ -308,7 +322,11 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
           {node.folder ? (
             <>
               <ChevronRight size={13} className={`shrink-0 text-fg-faint transition-transform ${isOpen ? "rotate-90" : ""}`} />
-              {isOpen ? <FolderOpen size={15} className="shrink-0 text-fg-faint" /> : <Folder size={15} className="shrink-0 text-fg-faint" />}
+              {isOpen ? (
+                <FolderOpen size={15} className="shrink-0 text-fg-faint" />
+              ) : (
+                <Folder size={15} className="shrink-0 text-fg-faint" />
+              )}
             </>
           ) : (
             <span className="ml-[19px] shrink-0">{iconFor(node.path)}</span>
@@ -340,21 +358,25 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-line px-2">
         <span className="flex-1 truncate text-[11px] font-semibold tracking-wide text-fg-faint uppercase">Files</span>
-        <IconBtn label="New file" onClick={() => void newFile("")}>
-          <FilePlus2 size={15} />
-        </IconBtn>
-        <IconBtn label="New folder" onClick={() => void newFolder("")}>
-          <FolderPlus size={15} />
-        </IconBtn>
-        <IconBtn
-          label="Upload files"
-          onClick={() => {
-            uploadFolder.current = "";
-            uploadRef.current?.click();
-          }}
-        >
-          <Upload size={15} />
-        </IconBtn>
+        {!readOnly && (
+          <>
+            <IconBtn label="New file" onClick={() => void newFile("")}>
+              <FilePlus2 size={15} />
+            </IconBtn>
+            <IconBtn label="New folder" onClick={() => void newFolder("")}>
+              <FolderPlus size={15} />
+            </IconBtn>
+            <IconBtn
+              label="Upload files"
+              onClick={() => {
+                uploadFolder.current = "";
+                uploadRef.current?.click();
+              }}
+            >
+              <Upload size={15} />
+            </IconBtn>
+          </>
+        )}
       </div>
       <div
         className={`min-h-0 flex-1 overflow-auto p-1.5 ${dropTarget === "" ? "bg-accent-soft/50" : ""}`}
@@ -371,7 +393,9 @@ export function FileTree({ store, snapshot, onOpen }: FileTreeProps) {
         }}
       >
         <ul>{tree.map((n) => renderNode(n, 0))}</ul>
-        {tree.length === 0 && <p className="px-2 py-4 text-center text-[12px] text-fg-faint">No files yet. Drop files here or create one.</p>}
+        {tree.length === 0 && (
+          <p className="px-2 py-4 text-center text-[12px] text-fg-faint">No files yet. Drop files here or create one.</p>
+        )}
       </div>
       <input
         ref={uploadRef}

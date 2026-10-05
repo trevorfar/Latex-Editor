@@ -24,6 +24,8 @@ import {
   Mail,
   UserRound,
   File as FileIcon,
+  Cloud,
+  LogIn,
 } from "lucide-react";
 import * as db from "@/lib/db";
 import { TEMPLATES, type Template } from "@/lib/templates";
@@ -36,6 +38,8 @@ import { Dropdown, type MenuEntry } from "@/components/ui/Menu";
 import { DialogProvider, useDialogs } from "@/components/ui/dialogs";
 import { Toaster, toast } from "@/components/ui/toast";
 import { SettingsDialog } from "@/components/editor/dialogs";
+import { displayName, openCloudProject, setDisplayName } from "@/lib/cloud";
+import { formatCode, normalizeCode } from "@/lib/cloud-types";
 
 const TEMPLATE_ICONS: Record<string, React.ReactNode> = {
   blank: <FileIcon size={18} />,
@@ -171,7 +175,9 @@ function Dashboard() {
   const remove = async (p: ProjectMeta) => {
     const ok = await dialogs.confirm({
       title: "Delete project?",
-      message: `"${p.name}" and all its files will be permanently deleted from this browser.`,
+      message: p.cloud
+        ? `This removes "${p.name}" from this browser only. The cloud copy stays, and you can rejoin with code ${formatCode(p.cloud.code)}.`
+        : `"${p.name}" and all its files will be permanently deleted from this browser.`,
       confirmLabel: "Delete",
       danger: true,
     });
@@ -189,11 +195,40 @@ function Dashboard() {
     { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove(p) },
   ];
 
+  const joinWithCode = async () => {
+    const raw = await dialogs.prompt({
+      title: "Join a shared project",
+      label: "Invite code",
+      placeholder: "ABCD-EFGH",
+      confirmLabel: "Join",
+      validate: (v) => (normalizeCode(v) ? null : "Codes look like ABCD-EFGH"),
+    });
+    const code = raw && normalizeCode(raw);
+    if (!code) return;
+    if (!displayName()) {
+      const name = await dialogs.prompt({
+        title: "Your name",
+        label: "Shown to the people you collaborate with",
+        confirmLabel: "Continue",
+      });
+      if (!name) return;
+      setDisplayName(name);
+    }
+    setBusy(true);
+    try {
+      router.push(`/project/${await openCloudProject(code)}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't open that project.", "error");
+      setBusy(false);
+    }
+  };
+
   const newMenu: MenuEntry[] = [
     { heading: "Start from" },
     ...TEMPLATES.map((t) => ({ label: t.name, icon: TEMPLATE_ICONS[t.id], onSelect: () => void createFromTemplate(t) })),
     { separator: true },
     { label: "Upload .zip or .tex files", icon: <FileUp size={14} />, onSelect: () => uploadRef.current?.click() },
+    { label: "Join with invite code", icon: <LogIn size={14} />, onSelect: () => void joinWithCode() },
   ];
 
   return (
@@ -224,6 +259,10 @@ function Dashboard() {
           >
             <SettingsIcon size={18} />
           </button>
+          <Button size="md" onClick={() => void joinWithCode()} disabled={busy}>
+            <LogIn size={16} />
+            <span className="hidden sm:inline">Join with code</span>
+          </Button>
           <Dropdown
             align="right"
             entries={newMenu}
@@ -246,8 +285,8 @@ function Dashboard() {
           <section className="py-8">
             <h1 className="text-2xl font-semibold tracking-tight">Write LaTeX, see the PDF instantly.</h1>
             <p className="mt-2 max-w-xl text-[14px] text-fg-muted">
-              Pick a template to start. Your projects are saved in this browser. You can also drop a .zip of an existing project
-              (Overleaf exports work) anywhere on this page.
+              Pick a template to start. Your projects are saved in this browser. You can also drop a .zip of an existing project (Overleaf
+              exports work) anywhere on this page.
             </p>
           </section>
         ) : (
@@ -278,7 +317,17 @@ function Dashboard() {
                   className="group grid grid-cols-[1fr_44px] items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-subtle sm:grid-cols-[1fr_140px_110px_44px]"
                 >
                   <Link href={`/project/${p.id}`} className="min-w-0">
-                    <div className="truncate text-[14px] font-medium group-hover:text-accent">{p.name}</div>
+                    <div className="flex items-center gap-1.5 truncate text-[14px] font-medium group-hover:text-accent">
+                      <span className="truncate">{p.name}</span>
+                      {p.cloud && (
+                        <span
+                          title={`Shared: ${formatCode(p.cloud.code)}`}
+                          className="flex shrink-0 items-center gap-1 rounded bg-accent-soft px-1.5 py-0.5 text-[10.5px] font-semibold text-accent"
+                        >
+                          <Cloud size={11} /> {formatCode(p.cloud.code)}
+                        </span>
+                      )}
+                    </div>
                     <div className="truncate text-[12px] text-fg-faint sm:hidden">
                       {relativeTime(p.updatedAt)} · {p.mainFile}
                     </div>
@@ -319,7 +368,9 @@ function Dashboard() {
                 disabled={busy}
                 className="flex flex-col items-start gap-2 rounded-xl border border-line bg-bg p-4 text-left transition-colors hover:border-accent hover:shadow-pop disabled:opacity-60"
               >
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">{TEMPLATE_ICONS[t.id]}</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">
+                  {TEMPLATE_ICONS[t.id]}
+                </span>
                 <span className="text-[14px] font-medium">{t.name}</span>
                 <span className="text-[12.5px] leading-snug text-fg-muted">{t.description}</span>
               </button>
@@ -360,7 +411,10 @@ function Dashboard() {
 
 /** fontspec / unicode-math need XeLaTeX or LuaLaTeX. */
 function guessCompiler(files: ImportedFile[]): ProjectMeta["compiler"] {
-  const tex = files.filter((f) => f.content).map((f) => f.content!).join("\n");
+  const tex = files
+    .filter((f) => f.content)
+    .map((f) => f.content!)
+    .join("\n");
   if (/\\usepackage(\[[^\]]*\])?\{[^}]*\b(fontspec|unicode-math|polyglossia)\b/.test(tex)) {
     return /\\directlua|luacode/.test(tex) ? "lualatex" : "xelatex";
   }

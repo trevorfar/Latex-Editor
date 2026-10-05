@@ -3,7 +3,7 @@
 import type { Text } from "@codemirror/state";
 import * as db from "./db";
 import { dirname, isInFolder, isTexPath, kindForPath, joinPath } from "./paths";
-import type { Compiler, ProjectFile, ProjectMeta } from "./types";
+import type { CloudLink, Compiler, FileKind, ProjectFile, ProjectMeta } from "./types";
 
 export interface StoreSnapshot {
   project: ProjectMeta;
@@ -12,6 +12,8 @@ export interface StoreSnapshot {
   folders: string[];
   currentPath: string | null;
   saveState: "saved" | "saving" | "unsaved" | "error";
+  /** Cloud projects are read-only unless this tab holds the editing lock. */
+  readOnly: boolean;
 }
 
 type Listener = () => void;
@@ -38,6 +40,7 @@ export class ProjectStore {
       folders: computeFolders(project.folders, files),
       currentPath: current,
       saveState: "saved",
+      readOnly: false,
     };
   }
 
@@ -127,6 +130,7 @@ export class ProjectStore {
   // ----- editing -----
 
   setLiveDoc(fileId: string, doc: Text) {
+    if (this.snapshot.readOnly) return;
     const file = this.snapshot.files.find((f) => f.id === fileId);
     if (!file) return;
     this.liveDocs.set(fileId, doc);
@@ -180,7 +184,61 @@ export class ProjectStore {
 
   // ----- project settings -----
 
+  setReadOnly(readOnly: boolean) {
+    if (this.snapshot.readOnly !== readOnly) this.set({ readOnly });
+  }
+
+  get readOnly() {
+    return this.snapshot.readOnly;
+  }
+
+  async setCloud(cloud: CloudLink | undefined) {
+    const project = await db.touchProject(this.project.id, { cloud });
+    if (project) this.set({ project });
+  }
+
+  /** Replaces the project with the cloud copy. Files keep their ids so open editors stay put. */
+  async applyRemote(
+    meta: Pick<ProjectMeta, "name" | "mainFile" | "compiler" | "folders">,
+    incoming: { path: string; kind: FileKind; content?: string; data?: Blob }[],
+    cloud: CloudLink,
+  ) {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const existing = new Map(this.snapshot.files.map((f) => [f.path, f]));
+    const now = Date.now();
+    const changedIds: string[] = [];
+    const files: ProjectFile[] = incoming.map((f) => {
+      const old = existing.get(f.path);
+      const id = old?.id ?? db.newId();
+      const same =
+        old && old.kind === f.kind && (f.kind === "text" ? (this.getText(f.path) ?? "") === f.content : old.data === f.data);
+      if (old && !same) changedIds.push(id);
+      return f.kind === "text"
+        ? { id, projectId: this.project.id, path: f.path, kind: "text", content: f.content ?? "", size: new Blob([f.content ?? ""]).size, updatedAt: now }
+        : { id, projectId: this.project.id, path: f.path, kind: "binary", data: f.data, size: f.data?.size ?? 0, updatedAt: now };
+    });
+    const keep = new Set(files.map((f) => f.path));
+    const removed = this.snapshot.files.filter((f) => !keep.has(f.path));
+    await db.deleteFiles(removed.map((f) => f.id));
+    await db.putFiles(files);
+    for (const id of changedIds) this.liveDocs.delete(id);
+    for (const f of removed) this.liveDocs.delete(f.id);
+    this.dirty.clear();
+    const project = await db.touchProject(this.project.id, { ...meta, cloud });
+    const currentPath =
+      this.snapshot.currentPath && keep.has(this.snapshot.currentPath)
+        ? this.snapshot.currentPath
+        : keep.has(meta.mainFile)
+          ? meta.mainFile
+          : (files.find((f) => f.kind === "text")?.path ?? null);
+    this.set({ files: files.sort((a, b) => a.path.localeCompare(b.path)), currentPath, saveState: "saved", ...(project ? { project } : {}) });
+    changedIds.forEach((id) => this.replacedListeners.forEach((l) => l(id)));
+    if (changedIds.length || removed.length || incoming.length !== existing.size) this.bumpContent(meta.mainFile);
+  }
+
   async updateProject(patch: Partial<Pick<ProjectMeta, "name" | "mainFile" | "compiler" | "folders">>) {
+    if (this.snapshot.readOnly) return;
     const project = await db.touchProject(this.project.id, patch);
     if (project) this.set({ project });
   }
@@ -200,6 +258,7 @@ export class ProjectStore {
   }
 
   async createFile(path: string, content: string | Blob = ""): Promise<ProjectFile> {
+    if (this.snapshot.readOnly) throw new Error("This project is read-only right now.");
     const kind = kindForPath(path);
     let file: ProjectFile;
     if (kind === "text") {
@@ -226,12 +285,14 @@ export class ProjectStore {
   }
 
   async createFolder(path: string) {
+    if (this.snapshot.readOnly) throw new Error("This project is read-only right now.");
     if (this.snapshot.folders.includes(path)) return;
     await this.updateProject({ folders: [...this.project.folders, path] });
   }
 
   /** Moves a file or folder. Returns false when the destination exists. */
   async move(from: string, to: string): Promise<boolean> {
+    if (this.snapshot.readOnly) return false;
     if (from === to) return true;
     if (this.exists(to)) return false;
     const isFolder = this.snapshot.folders.includes(from) && !this.fileByPath(from);
@@ -251,6 +312,7 @@ export class ProjectStore {
   }
 
   async remove(path: string) {
+    if (this.snapshot.readOnly) throw new Error("This project is read-only right now.");
     const isFolder = this.snapshot.folders.includes(path) && !this.fileByPath(path);
     const doomed = this.snapshot.files.filter((f) => (isFolder ? isInFolder(f.path, path) : f.path === path));
     await db.deleteFiles(doomed.map((f) => f.id));

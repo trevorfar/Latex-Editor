@@ -21,10 +21,12 @@ import {
   Square,
   Type,
   ArrowLeft,
+  Share2,
 } from "lucide-react";
 import { COMPILERS, type Compiler } from "@/lib/types";
 import type { StoreSnapshot } from "@/lib/project-store";
 import type { Settings } from "@/lib/settings";
+import type { ReactNode } from "react";
 import { updateSettings } from "@/lib/settings";
 import { Dropdown, type MenuEntry } from "@/components/ui/Menu";
 
@@ -48,6 +50,9 @@ interface TopBarProps {
   onWordCount: () => void;
   onSettings: () => void;
   onShortcuts: () => void;
+  onShare: () => void;
+  /** Cloud status chip, when the project is shared. */
+  cloudChip?: ReactNode;
 }
 
 function SaveStatus({ state }: { state: StoreSnapshot["saveState"] }) {
@@ -82,6 +87,7 @@ export function TopBar(props: TopBarProps) {
   ];
 
   const moreMenu: MenuEntry[] = [
+    { label: project.cloud ? "Share / invite code" : "Save to cloud", icon: <Share2 size={14} />, onSelect: props.onShare },
     { label: "Download PDF", icon: <Download size={14} />, onSelect: props.onDownloadPdf, disabled: !hasPdf },
     { label: "Download source (.zip)", icon: <FileArchive size={14} />, onSelect: props.onDownloadZip },
     { label: "Word count", icon: <Type size={14} />, onSelect: props.onWordCount },
@@ -123,7 +129,18 @@ export function TopBar(props: TopBarProps) {
       </button>
       {!mobile && <SaveStatus state={snapshot.saveState} />}
 
+      {props.cloudChip}
       <div className="min-w-0 flex-1" />
+      {!mobile && (
+        <button
+          onClick={props.onShare}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-2.5 text-[13px] font-medium text-fg-muted hover:bg-muted hover:text-fg"
+          title={project.cloud ? "Invite code" : "Save to the cloud and invite others"}
+        >
+          <Share2 size={14} />
+          <span className="hidden lg:inline">{project.cloud ? "Share" : "Save to cloud"}</span>
+        </button>
+      )}
 
       {mobile ? (
         <div className="flex rounded-md border border-line bg-subtle p-0.5">

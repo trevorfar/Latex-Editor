@@ -23,6 +23,7 @@
     "@codemirror/view": "^6.43.13",
     "@lezer/highlight": "^1.2.5",
     "@replit/codemirror-vim": "^6.4.0",
+    "@upstash/redis": "^1.39.0",
     "fflate": "^0.8.3",
     "idb": "^8.0.3",
     "lucide-react": "^1.51.0",

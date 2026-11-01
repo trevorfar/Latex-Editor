@@ -60,7 +60,16 @@ export async function presence(code: string, req: PresenceRequest): Promise<Pres
   const clean: PresenceRequest = { ...req, name: cleanName(req.name), tabId: String(req.tabId).slice(0, 64) };
   for (let attempt = 0; attempt < 6; attempt++) {
     const { raw, state } = await readPresence(kv, code);
-    const { next, res } = stepPresence(state, clean, Date.now(), meta.version);
+    const filePath = clean.path ? normalizePath(clean.path) : null;
+    if (!filePath && clean.mode !== "leave" && Object.values(state.files ?? {}).some(s => s.holder && Date.now() - s.holder.lastSeen < 70_000)) {
+      throw new CloudError(409, "Open a source file to request editing access.");
+    }
+    const scoped = filePath ? state.files?.[filePath] ?? EMPTY_PRESENCE : state;
+    const { next: scopedNext, res } = stepPresence(scoped, clean, Date.now(), meta.version);
+    const next = filePath ? { ...state, holder: state.holder?.id === clean.tabId ? null : state.holder, files: { ...state.files, [filePath]: scopedNext } } : { ...scopedNext, files: state.files };
+    if (clean.mode === "leave" && !filePath) {
+      next.files = Object.fromEntries(Object.entries(state.files ?? {}).map(([p, v]) => [p, stepPresence(v, clean, Date.now(), meta.version).next]));
+    }
     if (await kv.cas(keys(code).presence, raw, JSON.stringify(next), PRESENCE_TTL_S)) return res;
   }
   throw new CloudError(409, "Too many people joining at once. Try again.");
@@ -91,12 +100,23 @@ export async function getFiles(code: string, paths: string[]): Promise<Record<st
 /** Applies a save from the tab holding the lock. Returns the new version. */
 export async function save(code: string, req: SaveRequest): Promise<number> {
   const kv = kvOrThrow();
-  const { state } = await readPresence(kv, code);
-  if (state.holder?.id !== req.tabId) {
+  const { raw: presenceRaw, state } = await readPresence(kv, code);
+  const owns = (s: PresenceState) => s.holder?.id === req.tabId && Date.now() - s.holder.lastSeen < 70_000 && Date.now() - s.holder.lastActive < 600_000;
+  const meta = await getMeta(code);
+  const initialUpload = owns(state) && !Object.values(state.files ?? {}).some(s => s.holder && !owns(s) && Date.now() - s.holder.lastSeen < 70_000);
+  const changed = [...Object.keys(req.put ?? {}), ...(req.del ?? [])];
+  if (!initialUpload && (!Object.values(state.files ?? {}).some(owns) || changed.some(p => (p in meta.files || state.files?.[p]?.holder) && !owns(state.files?.[p] ?? EMPTY_PRESENCE)))) {
     throw new CloudError(423, "You no longer hold the editing lock, so this change wasn't saved.");
   }
-  const meta = await getMeta(code);
-  const m = validateMeta(req.meta);
+  if (!initialUpload && req.baseHashes && changed.some(p => (req.baseHashes?.[p] ?? null) !== (meta.files[p]?.h ?? null))) {
+    throw new CloudError(409, "This file changed since your last sync. Your local edits have been retained.");
+  }
+  let m = validateMeta(req.meta);
+  const currentMeta = { name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders };
+  if (!initialUpload && JSON.stringify(m) !== JSON.stringify(currentMeta)) {
+    if (req.baseMeta === JSON.stringify(m)) m = currentMeta;
+    else if (req.baseMeta !== JSON.stringify(currentMeta)) throw new CloudError(409, "Project settings changed. Refresh before saving.");
+  }
 
   const files = { ...meta.files };
   const put: Record<string, string> = {};
@@ -115,6 +135,7 @@ export async function save(code: string, req: SaveRequest): Promise<number> {
   if (total > MAX_PROJECT_BYTES) throw new CloudError(413, `Cloud projects are limited to ${Math.round(MAX_PROJECT_BYTES / 1024 / 1024)} MB.`);
 
   const next: CloudMeta = { ...meta, ...m, files, version: meta.version + 1, updatedAt: Date.now(), updatedBy: cleanName(req.name) };
-  await kv.save({ filesKey: keys(code).files, metaKey: keys(code).meta, put, del, meta: JSON.stringify(next), ttlSeconds: PROJECT_TTL_S });
+  const saved = await kv.save({ filesKey: keys(code).files, metaKey: keys(code).meta, put, del, meta: JSON.stringify(next), ttlSeconds: PROJECT_TTL_S, expectedMeta: JSON.stringify(meta), presenceKey: keys(code).presence, expectedPresence: presenceRaw! });
+  if (!saved) throw new CloudError(409, "Another collaborator saved. Retrying on the next sync.");
   return next.version;
 }

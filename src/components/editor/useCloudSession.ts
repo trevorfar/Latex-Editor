@@ -7,7 +7,6 @@ import {
   encodeFile,
   fetchFiles,
   fetchMeta,
-  leaveBeacon,
   pushChanges,
   sendPresence,
   tabId,
@@ -32,8 +31,8 @@ export interface CloudState {
   idleWarning: boolean;
 }
 
-const WAIT_POLL_MS = 8000;
-const PUSH_DELAY_MS = 1500;
+const WAIT_POLL_MS = 2000;
+const PUSH_DELAY_MS = 500;
 
 export function useCloudSession(store: ProjectStore, code: string | null) {
   const [state, setState] = useState<CloudState>({
@@ -50,6 +49,7 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
   const interacted = useRef(true);
   const lastInteraction = useRef(0);
   const pushing = useRef(false);
+  const pendingPush = useRef<Promise<void>>(Promise.resolve());
   const pushAgain = useRef(false);
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const beatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,6 +57,7 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
   const busy = useRef<Promise<void>>(Promise.resolve());
   const beatRef = useRef<(override?: PresenceMode) => Promise<void>>(() => Promise.resolve());
 
+  const lockedPath = useRef<string | null>(null);
   const name = () => displayName() || "Anonymous";
   const patch = useCallback((p: Partial<CloudState>) => setState((s) => ({ ...s, ...p })), []);
 
@@ -79,41 +80,68 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
 
   const pull = useCallback(async () => {
     if (!code) return;
-    const meta = await fetchMeta(code);
-    const link = store.project.cloud ?? { code, version: -1, hashes: {} };
-    const need = Object.keys(meta.files).filter((p) => link.hashes[p] !== meta.files[p].h || !store.fileByPath(p));
-    const data = await fetchFiles(code, meta, need);
-    const missing = need.filter((p) => !data[p]);
-    // Never record a file as synced without its contents; retry on the next poll instead.
-    if (missing.length) throw new Error(`Couldn't download ${missing.length} file(s) from the cloud.`);
-    const files = Object.entries(meta.files).map(([path, entry]) => {
-      if (data[path]) return { path, ...decodeFile(entry.k, data[path]) };
-      const local = store.fileByPath(path);
-      return local?.kind === "binary" ? { path, kind: "binary" as const, data: local.data } : { path, kind: "text" as const, content: store.getText(path) ?? "" };
-    });
-    await store.applyRemote(
-      { name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders },
-      files,
-      { code, version: meta.version, hashes: Object.fromEntries(Object.entries(meta.files).map(([p, e]) => [p, e.h])) },
-    );
-    lastMeta.current = JSON.stringify({ name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders });
-  }, [code, store]);
+    store.setReadOnly(true);
+    try {
+      const dirty = await diff();
+      const meta = await fetchMeta(code);
+      const link = store.project.cloud ?? { code, version: -1, hashes: {} };
+      const need = Object.keys(meta.files).filter((p) => link.hashes[p] !== meta.files[p].h || !store.fileByPath(p));
+      const data = await fetchFiles(code, meta, need);
+      if ((await fetchMeta(code)).version !== meta.version) {
+        throw new Error("Project changed during download; retrying on the next sync.");
+      }
+      const missing = need.filter((p) => !data[p]);
+      // Never record a file as synced without its contents; retry on the next poll instead.
+      if (missing.length) throw new Error(`Couldn't download ${missing.length} file(s) from the cloud.`);
+      const preserveLocal = status.current === "editing";
+      const files = Object.entries(meta.files).filter(([path]) => !preserveLocal || !dirty.del.includes(path)).map(([path, entry]) => {
+        if (dirty.put[path] && status.current === "editing") {
+          const local = store.fileByPath(path);
+          if (local) return local.kind === "binary" ? { path, kind: "binary" as const, data: local.data } : { path, kind: "text" as const, content: store.getText(path) ?? "" };
+        }
+        if (data[path]) return { path, ...decodeFile(entry.k, data[path]) };
+        const local = store.fileByPath(path);
+        return local?.kind === "binary" ? { path, kind: "binary" as const, data: local.data } : { path, kind: "text" as const, content: store.getText(path) ?? "" };
+      });
+      if (preserveLocal) {
+        for (const [path, entry] of Object.entries(dirty.put)) {
+          if (!(path in meta.files)) files.push({ path, ...decodeFile(entry.k, entry.d) });
+        }
+      }
+      const hashes = Object.fromEntries(Object.entries(meta.files).map(([p, e]) => [p, dirty.put[p] && preserveLocal ? link.hashes[p] ?? "" : e.h]));
+      if (preserveLocal) {
+        for (const path of dirty.del) if (link.hashes[path]) hashes[path] = link.hashes[path];
+      }
+      await store.applyRemote(
+        preserveLocal && dirty.metaKey !== lastMeta.current ? dirty.meta : { name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders },
+        files,
+        { code, version: meta.version, hashes },
+      );
+      lastMeta.current = JSON.stringify({ name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders });
+    } finally {
+      store.setReadOnly(status.current !== "editing" || lockedPath.current !== store.getSnapshot().currentPath);
+    }
+  }, [code, store, diff]);
 
   const push = useCallback(
     async (keepalive = false) => {
       if (!code || status.current !== "editing") return;
       if (pushing.current) {
         pushAgain.current = true;
+        await pendingPush.current;
         return;
       }
       pushing.current = true;
+      let finishPush!: () => void;
+      pendingPush.current = new Promise<void>((resolve) => { finishPush = resolve; });
       try {
         const d = await diff();
         if (!Object.keys(d.put).length && !d.del.length && d.metaKey === lastMeta.current) return;
         patch({ syncing: true });
-        const version = await pushChanges(code, name(), d.meta, d.put, d.del, keepalive);
+        const version = await pushChanges(code, name(), d.meta, d.put, d.del, keepalive, lastMeta.current ?? undefined, store.project.cloud?.hashes);
         lastMeta.current = d.metaKey;
         await store.setCloud({ code, version, hashes: d.hashes });
+        await pull();
         patch({ syncing: false, error: null, offline: false });
       } catch (err) {
         const e = err as Error & { status?: number };
@@ -124,19 +152,21 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
         } else patch({ syncing: false, error: e.status ? e.message : null, offline: !e.status });
       } finally {
         pushing.current = false;
+        finishPush();
         if (pushAgain.current) {
           pushAgain.current = false;
-          void push();
+          if (pushTimer.current) clearTimeout(pushTimer.current);
+          pushTimer.current = setTimeout(() => { busy.current = busy.current.then(() => push()); }, PUSH_DELAY_MS);
         }
       }
     },
-    [code, diff, patch, store],
+    [code, diff, patch, store, pull],
   );
 
   const schedulePush = useCallback(() => {
     if (status.current !== "editing") return;
     if (pushTimer.current) clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(() => void push(), PUSH_DELAY_MS);
+    pushTimer.current = setTimeout(() => { busy.current = busy.current.then(() => push()); }, PUSH_DELAY_MS);
   }, [push]);
 
   /** Keeps a local copy of edits that couldn't reach the cloud before the lock was lost. */
@@ -149,18 +179,25 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
   }, [diff, store]);
 
   const handle = useCallback(
-    async (res: PresenceResponse) => {
+    async (res: PresenceResponse, requestedPath: string | null) => {
+      if (requestedPath !== store.getSnapshot().currentPath) return;
       const prev = status.current;
       const link = store.project.cloud;
       if (res.status === "editing") {
-        if (prev !== "editing") {
+        if (prev !== "editing" || lockedPath.current !== store.getSnapshot().currentPath) {
           store.setReadOnly(true);
           if (!link || res.version !== link.version) await pull();
+          const previousPath = lockedPath.current;
+          lockedPath.current = store.getSnapshot().currentPath;
+          if (code && previousPath && previousPath !== lockedPath.current) {
+            await sendPresence(code, { tabId: tabId(), name: name(), mode: "leave", active: false, path: previousPath });
+          }
           status.current = "editing";
-          store.setReadOnly(false);
+          store.setReadOnly(requestedPath !== store.getSnapshot().currentPath);
           lastInteraction.current = Date.now();
           if (prev === "waiting" || prev === "expired") toast("It's your turn: you can edit now.", "success");
         }
+        if (link && res.version !== link.version) await pull();
       } else {
         if (prev === "editing") await rescueUnsynced();
         status.current = res.status === "left" ? "locked" : res.status;
@@ -169,7 +206,7 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
       }
       patch({ status: status.current, holder: res.holder, position: res.position, queueLength: res.queueLength, offline: false });
     },
-    [patch, pull, rescueUnsynced, store],
+    [code, patch, pull, rescueUnsynced, store],
   );
 
   const beat = useCallback(
@@ -178,13 +215,30 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
       // Serialise beats so a manual request never interleaves with the timer.
       busy.current = busy.current.then(async () => {
         if (beatTimer.current) clearTimeout(beatTimer.current);
-        const mode: PresenceMode = override ?? (status.current === "editing" ? "edit" : status.current === "waiting" ? "queue" : "view");
+        const switched = lockedPath.current !== store.getSnapshot().currentPath;
+        const mode: PresenceMode = override === "leave" ? "leave" : switched ? "queue" : override ?? (status.current === "editing" ? "edit" : status.current === "waiting" ? "queue" : "view");
         const active = interacted.current || override === "queue";
         interacted.current = false;
         try {
-          if (status.current === "editing") await push();
-          const res = await sendPresence(code, { tabId: tabId(), name: name(), mode, active });
-          await handle(res);
+          if (status.current === "editing") {
+            await push();
+            if (switched) {
+              const unsaved = await diff();
+              if (Object.keys(unsaved.put).length || unsaved.del.length) {
+                throw new Error("Waiting for unsaved changes before switching editing access.");
+              }
+            }
+          }
+          const requestedPath = store.getSnapshot().currentPath;
+          if (switched && lockedPath.current) {
+            await sendPresence(code, { tabId: tabId(), name: name(), mode: "leave", active: false, path: lockedPath.current });
+            lockedPath.current = null;
+            status.current = "connecting";
+          }
+          const res = await sendPresence(code, { tabId: tabId(), name: name(), mode, active, path: requestedPath ?? undefined });
+          await handle(res, requestedPath);
+          if (requestedPath === store.getSnapshot().currentPath) lockedPath.current = requestedPath;
+          else await sendPresence(code, { tabId: tabId(), name: name(), mode: "leave", active: false, path: requestedPath ?? undefined });
         } catch (err) {
           const e = err as Error & { status?: number };
           patch(e.status ? { error: e.message } : { offline: true });
@@ -199,7 +253,7 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
       });
       return busy.current;
     },
-    [code, handle, patch, push, store],
+    [code, diff, handle, patch, push, store],
   );
 
   useLayoutEffect(() => {
@@ -234,12 +288,20 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
     const onHide = () => {
       if (status.current === "editing") {
         void push(true);
-        leaveBeacon(code, name());
+        // The lease expires if the tab closes before its final save completes.
       }
     };
     window.addEventListener("pagehide", onHide);
     const offContent = store.onContentChange(schedulePush);
-    const offSnapshot = store.subscribe(schedulePush);
+    let observedPath = store.getSnapshot().currentPath;
+    const offSnapshot = store.subscribe(() => {
+      const nextPath = store.getSnapshot().currentPath;
+      if (nextPath !== observedPath) {
+        observedPath = nextPath;
+        store.setReadOnly(true);
+        void beat("queue");
+      } else schedulePush();
+    });
 
     return () => {
       window.removeEventListener("keydown", onActivity, true);

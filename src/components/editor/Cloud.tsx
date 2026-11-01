@@ -46,7 +46,7 @@ export function CloudBanner({ state, onRequest, onLeave }: { state: CloudState; 
   } else if (status === "locked") {
     body = holder ? (
       <>
-        <strong>{holder}</strong> is editing. You&apos;re viewing a read-only copy that updates as they save.
+        <strong>{holder}</strong> is editing this file. Open another file to edit alongside them, or wait here for access.
       </>
     ) : (
       "Someone else is about to start editing. You're viewing a read-only copy."
@@ -145,8 +145,8 @@ export function ShareDialog({ open, onClose, code, state, onCreate }: ShareDialo
           <div className="flex gap-3 rounded-lg bg-subtle p-3 text-[13px] text-fg-muted">
             <Cloud size={18} className="mt-0.5 shrink-0 text-accent" />
             <p>
-              Uploads this project and gives you an invite code. Anyone with the code can open it. One person edits at a time; others
-              see a live read-only copy and can join a queue. Editing access passes on after 10 minutes of inactivity.
+              Uploads this project and gives you an invite code. Anyone with the code can open it. One person edits each source file at a time; collaborators on other files
+              can edit simultaneously. Updates appear automatically; join the queue if your file is busy. Editing access passes on after 10 minutes of inactivity.
             </p>
           </div>
           <label className="block">
@@ -186,7 +186,7 @@ export function ShareDialog({ open, onClose, code, state, onCreate }: ShareDialo
           <div className="flex items-center gap-2 rounded-lg bg-subtle p-3 text-[12.5px] text-fg-muted">
             <Users size={15} className="shrink-0" />
             {state.status === "editing"
-              ? `You're editing. ${state.queueLength ? `${state.queueLength} waiting in line.` : "Nobody is waiting."}`
+              ? `You're editing this file. ${state.queueLength ? `${state.queueLength} waiting in line.` : "Nobody is waiting."}`
               : state.holder
                 ? `${state.holder} is editing. ${state.queueLength} waiting in line.`
                 : "Nobody is editing right now."}

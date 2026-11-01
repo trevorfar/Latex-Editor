@@ -95,7 +95,8 @@ async function syncFiles(dir: string, job: CompileJob): Promise<void> {
     const full = safeJoin(dir, f.path);
     if (!full) continue;
     await mkdir(path.dirname(full), { recursive: true });
-    await writeFile(full, f.data);
+    const existing = await readIfExists(full);
+    if (!existing || !existing.equals(Buffer.from(f.data))) await writeFile(full, f.data);
     current.add(f.path);
   }
   // Remove files the user deleted or renamed since the last compile.

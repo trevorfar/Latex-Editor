@@ -10,6 +10,7 @@ interface Person {
 export interface PresenceState {
   holder: Person | null;
   queue: Person[];
+  files?: Record<string, PresenceState>;
 }
 
 /** Holder's tab stopped sending heartbeats (closed, crashed, offline). */

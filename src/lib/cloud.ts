@@ -153,6 +153,8 @@ export async function pushChanges(
   put: Record<string, CloudFileData>,
   del: string[],
   keepalive = false,
+  baseMeta?: string,
+  baseHashes?: Record<string, string>,
 ): Promise<number> {
   const entries = Object.entries(put);
   for (const [, f] of entries) {
@@ -161,7 +163,7 @@ export async function pushChanges(
   const groups = entries.length ? batches(entries, ([, f]) => f.s) : [[]];
   let version = 0;
   for (let i = 0; i < groups.length; i++) {
-    const body: SaveRequest = { tabId: tabId(), name, meta, put: Object.fromEntries(groups[i]), del: i === 0 ? del : [] };
+    const body: SaveRequest = { baseMeta, baseHashes, tabId: tabId(), name, meta, put: Object.fromEntries(groups[i]), del: i === 0 ? del : [] };
     ({ version } = await api<{ version: number }>(`/api/cloud/${code}/files`, {
       method: "PUT",
       body: JSON.stringify(body),

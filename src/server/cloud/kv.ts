@@ -13,7 +13,7 @@ export interface Kv {
   cas(key: string, expected: string | null, value: string, ttlSeconds: number): Promise<boolean>;
   hget(key: string, fields: string[]): Promise<(string | null)[]>;
   /** Atomically-enough applies a save: hash puts/deletes plus a new value for `metaKey`. */
-  save(opts: { filesKey: string; metaKey: string; put: Record<string, string>; del: string[]; meta: string; ttlSeconds: number }): Promise<void>;
+  save(opts: { filesKey: string; metaKey: string; put: Record<string, string>; del: string[]; meta: string; ttlSeconds: number; expectedMeta: string; presenceKey: string; expectedPresence: string }): Promise<boolean>;
 }
 
 const CAS_SCRIPT = `
@@ -45,13 +45,17 @@ class UpstashKv implements Kv {
     return fields.map((f) => obj[f] ?? null);
   }
 
-  async save({ filesKey, metaKey, put, del, meta, ttlSeconds }: Parameters<Kv["save"]>[0]) {
-    const p = this.redis.pipeline();
-    if (Object.keys(put).length) p.hset(filesKey, put);
-    if (del.length) p.hdel(filesKey, ...del);
-    p.set(metaKey, meta, { ex: ttlSeconds });
-    p.expire(filesKey, ttlSeconds);
-    await p.exec();
+  async save({ filesKey, metaKey, put, del, meta, ttlSeconds, expectedMeta, presenceKey, expectedPresence }: Parameters<Kv["save"]>[0]) {
+    const ok = await this.redis.eval(`
+      if redis.call('GET', KEYS[2]) ~= ARGV[1] or redis.call('GET', KEYS[3]) ~= ARGV[2] then return 0 end
+      local puts = cjson.decode(ARGV[3])
+      for k,v in pairs(puts) do redis.call('HSET', KEYS[1], k, v) end
+      for _,k in ipairs(cjson.decode(ARGV[4])) do redis.call('HDEL', KEYS[1], k) end
+      redis.call('SET', KEYS[2], ARGV[5], 'EX', ARGV[6])
+      redis.call('EXPIRE', KEYS[1], ARGV[6])
+      return 1
+    `, [filesKey, metaKey, presenceKey], [expectedMeta, expectedPresence, JSON.stringify(put), JSON.stringify(del), meta, ttlSeconds]);
+    return Number(ok) === 1;
   }
 }
 
@@ -103,12 +107,14 @@ class FileKv implements Kv {
     });
   }
 
-  save({ filesKey, metaKey, put, del, meta }: Parameters<Kv["save"]>[0]) {
+  save({ filesKey, metaKey, put, del, meta, expectedMeta, presenceKey, expectedPresence }: Parameters<Kv["save"]>[0]) {
     return this.locked(async () => {
+      if (await this.read<string>(metaKey) !== expectedMeta || await this.read<string>(presenceKey) !== expectedPresence) return false;
       const h = { ...((await this.read<Record<string, string>>(filesKey)) ?? {}), ...put };
       for (const d of del) delete h[d];
       await this.write(filesKey, h);
       await this.write(metaKey, meta);
+      return true;
     });
   }
 }

@@ -33,6 +33,7 @@ export type PresenceMode = "view" | "queue" | "edit" | "leave";
 export type PresenceStatus = "editing" | "waiting" | "locked" | "expired" | "left";
 
 export interface PresenceRequest {
+  path?: string;
   tabId: string;
   name: string;
   mode: PresenceMode;
@@ -51,6 +52,8 @@ export interface PresenceResponse {
 }
 
 export interface SaveRequest {
+  baseMeta?: string;
+  baseHashes?: Record<string, string>;
   tabId: string;
   name: string;
   meta: Pick<CloudMeta, "name" | "mainFile" | "compiler" | "folders">;
@@ -59,7 +62,7 @@ export interface SaveRequest {
 }
 
 export const IDLE_LIMIT_MS = 10 * 60 * 1000;
-export const HEARTBEAT_MS = 20 * 1000;
+export const HEARTBEAT_MS = 2000;
 /** Keep each request under Vercel's 4.5 MB body limit. */
 export const MAX_REQUEST_BYTES = 3 * 1024 * 1024;
 

@@ -29,12 +29,13 @@ import { Dropdown } from "@/components/ui/Menu";
 
 interface FormatBarProps {
   getView: () => EditorView | null;
+  readOnly?: boolean;
 }
 
-export function FormatBar({ getView }: FormatBarProps) {
+export function FormatBar({ getView, readOnly = false }: FormatBarProps) {
   const run = (fn: (v: EditorView) => void) => () => {
     const v = getView();
-    if (v) fn(v);
+    if (v && !v.state.readOnly) fn(v);
   };
   const snip = (template: string) => run((v) => insertSnippet(v, template));
   const insertAndComplete = (text: string) =>
@@ -46,7 +47,7 @@ export function FormatBar({ getView }: FormatBarProps) {
   const sep = <span className="mx-1 h-5 w-px shrink-0 bg-line" />;
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-subtle px-1.5">
+    <div inert={readOnly} aria-disabled={readOnly} className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line bg-subtle px-1.5">
       <Tool label="Undo (Ctrl+Z)" onClick={run((v) => undo(v))}>
         <Undo2 size={15} />
       </Tool>

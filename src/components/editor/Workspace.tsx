@@ -348,7 +348,9 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
 
   const editorPane = (
     <div className="relative flex h-full min-h-0 flex-col bg-bg">
-      {settings.showFormatBar && !readOnly && currentFile?.kind === "text" && <FormatBar getView={() => editorRef.current?.view() ?? null} />}
+      {settings.showFormatBar && currentFile?.kind === "text" && (
+        <FormatBar readOnly={readOnly} getView={() => editorRef.current?.view() ?? null} />
+      )}
       <div className="relative min-h-0 flex-1">
         <CodeEditor
           ref={editorRef}

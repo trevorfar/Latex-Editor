@@ -285,7 +285,14 @@ export function CodeEditor({
     if (!view || !currentId.current) return;
     view.dispatch({ effects: reconfigureAll() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings, theme, readOnly]);
+  }, [settings, theme]);
+
+  // A sync lock must not rebuild highlighting, completion, or keymaps.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !currentId.current) return;
+    view.dispatch({ effects: compartments.current.readOnly.reconfigure(EditorState.readOnly.of(readOnly)) });
+  }, [readOnly]);
 
   // Diagnostics after each compile.
   useEffect(() => {

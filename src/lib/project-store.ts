@@ -202,6 +202,7 @@ export class ProjectStore {
     meta: Pick<ProjectMeta, "name" | "mainFile" | "compiler" | "folders">,
     incoming: { path: string; kind: FileKind; content?: string; data?: Blob }[],
     cloud: CloudLink,
+    preservePath: string | null = null,
   ) {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
@@ -209,6 +210,11 @@ export class ProjectStore {
     const now = Date.now();
     const changedIds: string[] = [];
     const files: ProjectFile[] = incoming.map((f) => {
+      // The lock holder may keep typing throughout a background download.
+      if (f.path === preservePath) {
+        const local = existing.get(f.path);
+        if (local) return local;
+      }
       const old = existing.get(f.path);
       const id = old?.id ?? db.newId();
       const same =
@@ -221,10 +227,16 @@ export class ProjectStore {
     const keep = new Set(files.map((f) => f.path));
     const removed = this.snapshot.files.filter((f) => !keep.has(f.path));
     await db.deleteFiles(removed.map((f) => f.id));
-    await db.putFiles(files);
+    // Local autosave owns the active file; a downloaded snapshot must not
+    // race with a newer write to that file.
+    await db.putFiles(files.filter((f) => f.path !== preservePath));
     for (const id of changedIds) this.liveDocs.delete(id);
     for (const f of removed) this.liveDocs.delete(f.id);
-    this.dirty.clear();
+    const preservedId = preservePath ? existing.get(preservePath)?.id : undefined;
+    for (const id of this.dirty) {
+      if (id !== preservedId) this.dirty.delete(id);
+    }
+    if (this.dirty.size) this.scheduleSave();
     const project = await db.touchProject(this.project.id, { ...meta, cloud });
     const currentPath =
       this.snapshot.currentPath && keep.has(this.snapshot.currentPath)
@@ -232,7 +244,7 @@ export class ProjectStore {
         : keep.has(meta.mainFile)
           ? meta.mainFile
           : (files.find((f) => f.kind === "text")?.path ?? null);
-    this.set({ files: files.sort((a, b) => a.path.localeCompare(b.path)), currentPath, saveState: "saved", ...(project ? { project } : {}) });
+    this.set({ files: files.sort((a, b) => a.path.localeCompare(b.path)), currentPath, saveState: this.dirty.size ? "unsaved" : "saved", ...(project ? { project } : {}) });
     changedIds.forEach((id) => this.replacedListeners.forEach((l) => l(id)));
     if (changedIds.length || removed.length || incoming.length !== existing.size) this.bumpContent(meta.mainFile);
   }

@@ -80,7 +80,8 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
 
   const pull = useCallback(async () => {
     if (!code) return;
-    store.setReadOnly(true);
+    const editingPath = status.current === "editing" && !store.readOnly ? lockedPath.current : null;
+    if (!editingPath) store.setReadOnly(true);
     try {
       const dirty = await diff();
       const meta = await fetchMeta(code);
@@ -116,6 +117,7 @@ export function useCloudSession(store: ProjectStore, code: string | null) {
         preserveLocal && dirty.metaKey !== lastMeta.current ? dirty.meta : { name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders },
         files,
         { code, version: meta.version, hashes },
+        editingPath,
       );
       lastMeta.current = JSON.stringify({ name: meta.name, mainFile: meta.mainFile, compiler: meta.compiler, folders: meta.folders });
     } finally {

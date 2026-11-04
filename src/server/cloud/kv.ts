@@ -12,6 +12,8 @@ export interface Kv {
   /** Writes `value` only if the key currently holds `expected` (null = missing). */
   cas(key: string, expected: string | null, value: string, ttlSeconds: number): Promise<boolean>;
   hget(key: string, fields: string[]): Promise<(string | null)[]>;
+  /** Resets a key's time-to-live (no-op when the key doesn't exist). */
+  expire(key: string, ttlSeconds: number): Promise<void>;
   /** Atomically-enough applies a save: hash puts/deletes plus a new value for `metaKey`. */
   save(opts: { filesKey: string; metaKey: string; put: Record<string, string>; del: string[]; meta: string; ttlSeconds: number; expectedMeta: string; presenceKey: string; expectedPresence: string }): Promise<boolean>;
 }
@@ -34,6 +36,10 @@ class UpstashKv implements Kv {
   async cas(key: string, expected: string | null, value: string, ttl: number) {
     const ok = await this.redis.eval(CAS_SCRIPT, [key], [expected ?? "", value, String(ttl)]);
     return Number(ok) === 1;
+  }
+
+  async expire(key: string, ttl: number) {
+    await this.redis.expire(key, ttl);
   }
 
   async hget(key: string, fields: string[]) {
@@ -98,6 +104,10 @@ class FileKv implements Kv {
       await this.write(key, value);
       return true;
     });
+  }
+
+  async expire() {
+    // Local files don't expire.
   }
 
   hget(key: string, fields: string[]) {

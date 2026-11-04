@@ -6,6 +6,8 @@ import {
   MAX_REQUEST_BYTES,
   type CloudFileData,
   type CloudMeta,
+  type CommentAction,
+  type CommentsDoc,
   type PresenceRequest,
   type PresenceResponse,
   type SaveRequest,
@@ -106,6 +108,14 @@ export function fetchMeta(code: string) {
 
 export function sendPresence(code: string, req: PresenceRequest) {
   return api<PresenceResponse>(`/api/cloud/${code}/presence`, { method: "POST", body: JSON.stringify(req) });
+}
+
+export function fetchComments(code: string, since?: number) {
+  return api<CommentsDoc | { version: number; comments?: undefined }>(`/api/cloud/${code}/comments${since !== undefined ? `?since=${since}` : ""}`);
+}
+
+export function sendComment(code: string, name: string, action: CommentAction) {
+  return api<CommentsDoc>(`/api/cloud/${code}/comments`, { method: "POST", body: JSON.stringify({ ...action, name }) });
 }
 
 /** Releases the lock while the page unloads. */

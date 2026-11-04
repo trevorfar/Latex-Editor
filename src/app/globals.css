@@ -327,6 +327,31 @@ button:disabled {
   animation: pdf-marker 2.2s ease-out forwards;
   z-index: 10;
 }
+/* Comment highlights: drawn under the text layer's hit area so text stays selectable. */
+.cmt-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.cmt-hl {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  transition: background-color 0.15s;
+}
+.cmt-hl-open {
+  background: rgb(250 204 21 / 0.38);
+  border-bottom: 2px solid rgb(234 179 8 / 0.9);
+}
+.cmt-hl-active {
+  background: rgb(249 115 22 / 0.42);
+  border-bottom: 2px solid rgb(234 88 12);
+}
+.cmt-hl-draft {
+  background: rgb(59 130 246 / 0.3);
+  border-bottom: 2px dashed rgb(37 99 235);
+}
 @keyframes pdf-marker {
   0%,
   50% {

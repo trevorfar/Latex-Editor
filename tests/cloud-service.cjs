@@ -12,6 +12,7 @@ const kv = {
     data.set(k, value);
     return true;
   },
+  expire: async () => {},
   save: async o => {
     if (collide) { collide = false; return false; }
     if (data.get(o.metaKey) !== o.expectedMeta || data.get(o.presenceKey) !== o.expectedPresence) return false;

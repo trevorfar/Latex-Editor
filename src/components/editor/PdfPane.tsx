@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, type Ref } from "react";
-import { AlertCircle, AlertTriangle, Download, ExternalLink, FileText, Loader2, Minus, Plus, ScrollText } from "lucide-react";
-import { PdfViewer, type PdfClick, type PdfViewerHandle } from "./PdfViewer";
+import { useMemo, useRef, useState, type Ref } from "react";
+import { AlertCircle, AlertTriangle, Download, ExternalLink, FileText, Loader2, MessageSquare, MessageSquarePlus, Minus, Plus, ScrollText } from "lucide-react";
+import { PdfViewer, type HighlightPositions, type PdfClick, type PdfHighlight, type PdfSelection, type PdfViewerHandle } from "./PdfViewer";
 import { LogsPanel } from "./LogsPanel";
+import { CommentsPanel, type CommentDraft } from "./CommentsPanel";
+import type { CommentsState } from "./useCloudComments";
+import type { CommentRect } from "@/lib/cloud-types";
 import type { CompilerState } from "./useCompiler";
 import { Button } from "@/components/ui/Button";
 
@@ -51,9 +54,13 @@ interface PdfPaneProps {
   viewer: () => PdfViewerHandle | null;
   onInverseSync: (click: PdfClick) => void;
   onJump: (file: string, line: number) => void;
+  /** Shared comments (cloud projects only). */
+  comments?: CommentsState;
+  /** Jumps to the source of a commented passage. */
+  onCommentSource?: (rect: CommentRect, quote: string) => void;
 }
 
-export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRef, viewer, onInverseSync, onJump }: PdfPaneProps) {
+export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRef, viewer, onInverseSync, onJump, comments, onCommentSource }: PdfPaneProps) {
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(0);
   const [pageDraft, setPageDraft] = useState<string | null>(null);
@@ -61,6 +68,42 @@ export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRe
   const [scalePct, setScalePct] = useState(100);
   const [initialScale] = useState(readScale);
   const { pdf, result, compiling, error } = compiler;
+
+  // ----- comments -----
+  const commenting = Boolean(comments?.enabled);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [selection, setSelection] = useState<PdfSelection | null>(null);
+  const [draft, setDraft] = useState<CommentDraft | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [positions, setPositions] = useState<HighlightPositions>({});
+  const pendingReveal = useRef<string | null>(null);
+  const allComments = comments?.comments;
+  const openCount = allComments?.filter((c) => c.status === "open").length ?? 0;
+
+  const highlights = useMemo<PdfHighlight[]>(() => {
+    if (!commenting || !allComments) return [];
+    const list: PdfHighlight[] = allComments
+      .filter((c) => c.status === "open" || c.id === activeId)
+      .map((c) => ({ id: c.id, quote: c.quote, rects: c.rects, tone: c.id === activeId ? "active" : "open" }));
+    if (draft) list.push({ id: "draft", quote: draft.quote, rects: draft.rects, tone: "draft", fixed: true });
+    return list;
+  }, [commenting, allComments, activeId, draft]);
+
+  const activate = (id: string | null) => {
+    setActiveId(id);
+    if (!id) return;
+    if (positions[id]) viewer()?.revealHighlight(id);
+    else pendingReveal.current = id;
+  };
+
+  const startComment = () => {
+    if (!selection) return;
+    setDraft({ quote: selection.quote, rects: selection.rects });
+    setActiveId(null);
+    setPanelOpen(true);
+    setSelection(null);
+    viewer()?.clearSelection();
+  };
   const errors = result?.parsed.errors.length ?? 0;
   const warnings = (result?.parsed.warnings.length ?? 0) + (result?.parsed.typesetting.length ?? 0);
   const failed = result?.header.status !== undefined && result.header.status !== "success";
@@ -107,6 +150,18 @@ export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRe
             </span>
           )}
         </button>
+
+        {commenting && (
+          <button
+            onClick={() => setPanelOpen(!panelOpen)}
+            title="Comments: select text in the PDF to add one"
+            className={`flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px] ${panelOpen ? "bg-muted text-fg" : "text-fg-muted hover:bg-muted hover:text-fg"}`}
+          >
+            <MessageSquare size={15} />
+            <span className="hidden sm:inline">Comments</span>
+            {openCount > 0 && <span className="rounded-full bg-warning px-1.5 text-[10.5px] font-semibold text-white">{openCount}</span>}
+          </button>
+        )}
 
         <div className="min-w-0 flex-1" />
 
@@ -162,7 +217,8 @@ export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRe
         )}
       </div>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="@container relative flex min-h-0 flex-1">
+      <div className="relative min-h-0 min-w-0 flex-1">
         {compiling && <div className="progress-bar absolute inset-x-0 top-0 z-30 h-0.5 bg-accent-soft" />}
 
         {pdf && failed && !logsOpen && (
@@ -188,7 +244,33 @@ export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRe
             setScaleValue(value);
           }}
           onDoubleClick={onInverseSync}
+          highlights={highlights}
+          onHighlightClick={(id) => {
+            setPanelOpen(true);
+            activate(id);
+          }}
+          onHighlightsLocated={(found) => {
+            setPositions(found);
+            const id = pendingReveal.current;
+            if (id && found[id]) {
+              pendingReveal.current = null;
+              requestAnimationFrame(() => viewer()?.revealHighlight(id));
+            }
+          }}
+          onSelectText={commenting ? setSelection : undefined}
         />
+
+        {commenting && selection && pdf && (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={startComment}
+            className="pop-in absolute z-20 flex h-8 items-center gap-1.5 rounded-full bg-accent px-3 text-[12.5px] font-medium text-accent-fg shadow-pop hover:bg-accent-hover"
+            style={{ left: Math.max(4, selection.anchor.x - 60), top: selection.anchor.y + 6 }}
+          >
+            <MessageSquarePlus size={14} />
+            Comment
+          </button>
+        )}
 
         {!pdf && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-pdf p-6 text-center">
@@ -221,6 +303,25 @@ export function PdfPane({ compiler, projectName, logsOpen, setLogsOpen, viewerRe
         )}
 
         {logsOpen && <LogsPanel result={result} error={error} onJump={onJump} onClose={() => setLogsOpen(false)} />}
+      </div>
+      {commenting && panelOpen && comments && (
+        <div className="absolute inset-0 z-40 @md:static @md:z-auto @md:w-[290px] @md:shrink-0">
+          <CommentsPanel
+            comments={comments}
+            positions={positions}
+            draft={draft}
+            onDraftDone={() => setDraft(null)}
+            activeId={activeId}
+            onActivate={activate}
+            onShowSource={(c) => onCommentSource?.(positions[c.id]?.rects[0] ?? c.rects[0], c.quote)}
+            onClose={() => {
+              setPanelOpen(false);
+              setDraft(null);
+              setActiveId(null);
+            }}
+          />
+        </div>
+      )}
       </div>
     </div>
   );

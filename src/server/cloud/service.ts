@@ -6,7 +6,7 @@ import { COMPILERS } from "@/lib/types";
 import { randomCode, type CloudMeta, type PresenceRequest, type PresenceResponse, type SaveRequest } from "@/lib/cloud-types";
 
 /** Unused projects disappear after this long, keeping the free tier tidy. Every save resets it. */
-const PROJECT_TTL_S = 180 * 24 * 60 * 60;
+export const PROJECT_TTL_S = 180 * 24 * 60 * 60;
 const PRESENCE_TTL_S = 24 * 60 * 60;
 const MAX_PROJECT_BYTES = (Number(process.env.CLOUD_MAX_PROJECT_MB) || 25) * 1024 * 1024;
 
@@ -31,7 +31,7 @@ function kvOrThrow(): Kv {
   return kv;
 }
 
-function cleanName(name: unknown): string {
+export function cleanName(name: unknown): string {
   return String(name ?? "").trim().slice(0, 40) || "Someone";
 }
 
@@ -137,5 +137,7 @@ export async function save(code: string, req: SaveRequest): Promise<number> {
   const next: CloudMeta = { ...meta, ...m, files, version: meta.version + 1, updatedAt: Date.now(), updatedBy: cleanName(req.name) };
   const saved = await kv.save({ filesKey: keys(code).files, metaKey: keys(code).meta, put, del, meta: JSON.stringify(next), ttlSeconds: PROJECT_TTL_S, expectedMeta: JSON.stringify(meta), presenceKey: keys(code).presence, expectedPresence: presenceRaw! });
   if (!saved) throw new CloudError(409, "Another collaborator saved. Retrying on the next sync.");
+  // Comments live as long as the project they belong to.
+  await kv.expire(`tb:${code}:comments`, PROJECT_TTL_S).catch(() => undefined);
   return next.version;
 }

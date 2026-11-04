@@ -81,3 +81,51 @@ export function randomCode(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
 }
+
+// ----- comments -----
+
+/** A highlighted area on a PDF page. Top-left origin, PDF points. */
+export interface CommentRect {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type CommentStatus = "open" | "accepted" | "rejected";
+
+export interface CommentReply {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: number;
+}
+
+export interface CloudComment {
+  id: string;
+  author: string;
+  createdAt: number;
+  /** The highlighted PDF text. Used to find the spot again after a recompile moves it. */
+  quote: string;
+  /** Where the text was when the comment was made (fallback when the quote can't be found). */
+  rects: CommentRect[];
+  body: string;
+  replies: CommentReply[];
+  status: CommentStatus;
+  resolvedBy?: string;
+  resolvedAt?: number;
+}
+
+export interface CommentsDoc {
+  version: number;
+  comments: CloudComment[];
+}
+
+export type CommentAction =
+  | { action: "add"; quote: string; rects: CommentRect[]; body: string }
+  | { action: "reply"; id: string; body: string }
+  | { action: "status"; id: string; status: CommentStatus }
+  | { action: "delete"; id: string };
+
+export type CommentRequest = CommentAction & { name: string };

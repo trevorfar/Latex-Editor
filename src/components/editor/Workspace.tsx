@@ -8,7 +8,7 @@ import { ProjectStore } from "@/lib/project-store";
 import { useResolvedTheme, useSettings, watchSystemTheme } from "@/lib/settings";
 import { extractBibEntries, extractBibItems, extractCommands, extractEnvironments, extractIncludes, extractLabels, wordCount, type WordCountResult } from "@/lib/latex/scan";
 import type { ProjectIndex } from "@/lib/latex/completions";
-import { findInPdf, findInSource, sourceLineWords } from "@/lib/text-sync";
+import { findInPdf, findInSource, normalizeWord, sourceLineWords } from "@/lib/text-sync";
 import { isBibPath, isTexPath } from "@/lib/paths";
 import { projectToZip } from "@/lib/zip";
 import { requestPersistentStorage } from "@/lib/db";
@@ -23,6 +23,8 @@ import { TopBar, type ViewMode } from "./TopBar";
 import { SettingsDialog, ShortcutsDialog, WordCountDialog } from "./dialogs";
 import { useCompiler } from "./useCompiler";
 import { useCloudSession } from "./useCloudSession";
+import { useCloudComments } from "./useCloudComments";
+import type { CommentRect } from "@/lib/cloud-types";
 import { CloudBanner, CloudChip, ShareDialog } from "./Cloud";
 import { createCloudProject, setDisplayName } from "@/lib/cloud";
 import { DialogProvider, useDialogs } from "@/components/ui/dialogs";
@@ -110,6 +112,7 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
 
   const { project, currentPath, readOnly } = snapshot;
   const cloud = useCloudSession(store, project.cloud?.code ?? null);
+  const comments = useCloudComments(project.cloud?.code ?? null);
 
   const saveToCloud = async (name: string) => {
     setDisplayName(name);
@@ -221,6 +224,15 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
       else toast("Couldn't locate that text in the source.");
     },
     [compiler.synctex, jumpTo, store],
+  );
+
+  /** "Show in source" for a comment: same lookup as double-clicking the start of the highlighted text. */
+  const onCommentSource = useCallback(
+    (rect: CommentRect, quote: string) => {
+      const words = (quote.match(/[\p{L}\p{N}]+/gu) ?? []).map(normalizeWord).filter((w) => w.length > 1 || /\d/.test(w));
+      onInverseSync({ page: rect.page, x: rect.x + Math.min(4, rect.w / 2), y: rect.y + rect.h / 2, words: words.slice(0, 12), anchor: 0 });
+    },
+    [onInverseSync],
   );
 
   // ----- actions -----
@@ -390,6 +402,8 @@ function WorkspaceInner({ store }: { store: ProjectStore }) {
       onJump={(file, line) => {
         jumpTo(file, line);
       }}
+      comments={comments}
+      onCommentSource={onCommentSource}
     />
   );
 
